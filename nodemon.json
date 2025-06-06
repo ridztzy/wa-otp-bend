@@ -1,0 +1,11 @@
+{
+  "watch": ["server.js"],
+  "ignore": [
+    "auth_info.json",
+    "session.json",
+    "creds.json",
+    "sessions",
+    "tmp",
+    "logs"
+  ]
+}
