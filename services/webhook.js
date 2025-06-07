@@ -1,4 +1,4 @@
-const fetch = require('node-fetch');
+const fetch = (...args) => import('node-fetch').then(mod => mod.default(...args));
 
 async function sendWebhook(webhookUrl, data) {
   if (!webhookUrl) return;
