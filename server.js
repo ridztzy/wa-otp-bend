@@ -66,6 +66,7 @@ let sock;
 let qrCodeData = null;
 let isConnected = false;
 let phoneNumber = null;
+let isInitializing = false;
 // -----------------------------
 
 // --- Utility Functions ---
@@ -92,16 +93,27 @@ function emitWhatsAppStatus() {
 
 // Initialize WhatsApp Connection
 async function initializeWhatsApp() {
-  console.log('🔄 Initializing WhatsApp connection...');
-  try {
-    const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
-    
-    sock = makeWASocket({
-      auth: state,
-      printQRInTerminal: false,
-      browser: ['WA OTP Gateway', 'Chrome', '1.0'], // Custom browser info
-      markOnlineOnConnect: false, // Don't show online immediately
-      getMessage: async (key) => { // Required for messages
+    if (isInitializing) {
+        console.log('🔄 WhatsApp connection is already initializing. Skipping.');
+        return;
+    }
+    isInitializing = true;
+    console.log('🔄 Initializing WhatsApp connection...');
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+
+        // Hentikan sesi sebelumnya jika ada dan belum terlogout
+        if (sock && sock.ws.readyState === sock.ws.OPEN) {
+            console.log('Closing existing WhatsApp socket before re-initialization.');
+            await sock.logout(); // Atau sock.end()
+        }
+
+        sock = makeWASocket({
+            auth: state,
+            printQRInTerminal: false,
+            browser: ['WA OTP Gateway', 'Chrome', '1.0'],
+            markOnlineOnConnect: false,
+            getMessage: async (key) => { // Required for messages
         return {
           // Anda mungkin perlu menyimpan pesan di DB jika ingin membalas atau mengakses riwayat
           // Untuk OTP gateway, ini mungkin tidak terlalu relevan
@@ -130,10 +142,16 @@ async function initializeWhatsApp() {
         
         // Coba reconnect hanya jika bukan logout
         if (shouldReconnect) {
-          console.log('Attempting to reconnect WhatsApp...');
-          // Delay sedikit sebelum reconnect untuk menghindari loop terlalu cepat
-          setTimeout(() => initializeWhatsApp(), 5000); 
+    console.log('Attempting to reconnect WhatsApp...');
+    setTimeout(() => {
+        // Pastikan tidak sedang initializing dan tidak sedang connected sebelum mencoba reconnect
+        if (!isInitializing && !isConnected) { 
+            initializeWhatsApp();
         } else {
+            console.log('Skipping reconnect: already initializing or connected.');
+        }
+    }, 5000); 
+}else {
           console.log('WhatsApp logged out. Manual scan required to reconnect.');
         }
       } else if (connection === 'open') {
@@ -167,12 +185,14 @@ async function initializeWhatsApp() {
     });
     
   } catch (error) {
-    console.error('❌ Error initializing WhatsApp:', error);
-    isConnected = false;
-    phoneNumber = null;
-    qrCodeData = null; // Ensure QR is cleared on error
-    emitWhatsAppStatus(); // Emit error status
-  }
+        console.error('❌ Error initializing WhatsApp:', error);
+        isConnected = false;
+        phoneNumber = null;
+        qrCodeData = null;
+        emitWhatsAppStatus();
+    } finally {
+        isInitializing = false; // Set kembali ke false setelah selesai (baik sukses/gagal)
+    }
 }
 
 // Fungsi untuk mengirim pesan WhatsApp (tetap sinkron untuk kesederhanaan, pertimbangkan antrean untuk skala)
@@ -341,23 +361,33 @@ app.get('/api/whatsapp/qrcode', (req, res) => {
 });
 
 app.post('/api/whatsapp/refresh-qrcode', async (req, res) => {
-  try {
-    if (isConnected) {
-      console.warn('QR code regeneration attempted while already connected.');
-      return res.status(400).json({ error: 'WhatsApp is already connected. Cannot refresh QR code.' });
+    try {
+        if (isConnected) {
+            console.warn('QR code regeneration attempted while already connected.');
+            return res.status(400).json({ error: 'WhatsApp is already connected. Cannot refresh QR code.' });
+        }
+        if (isInitializing) { // Pencegahan duplikasi panggilan
+            return res.status(409).json({ error: 'WhatsApp initialization is already in progress. Please wait.' });
+        }
+
+        console.log('Request to refresh QR code received.');
+        // Pastikan untuk menghapus sesi lama jika ingin QR baru
+        const fs = require('fs');
+        const fsp = require('fs/promises');
+        const path = require('path');
+        const authInfoPath = path.resolve(__dirname, 'auth_info');
+        if (fs.existsSync(authInfoPath)) {
+            await fsp.rm(authInfoPath, { recursive: true, force: true });
+            console.log('Deleted auth_info directory before refreshing QR.');
+        }
+
+        await initializeWhatsApp(); 
+
+        res.json({ message: 'QR code refresh initiated. Please wait for a new QR code.' });
+    } catch (error) {
+        console.error('Error refreshing QR code:', error.message);
+        res.status(500).json({ error: 'Failed to refresh QR code: ' + error.message });
     }
-    
-    console.log('Request to refresh QR code received.');
-    // Baileys akan otomatis menghasilkan QR baru jika tidak ada sesi aktif
-    // Jadi, cukup panggil initializeWhatsApp lagi.
-    // Jika ada QR lama yang masih valid, ini akan me-replace-nya
-    await initializeWhatsApp(); 
-    
-    res.json({ message: 'QR code refresh initiated. Please wait for a new QR code.' });
-  } catch (error) {
-    console.error('Error refreshing QR code:', error.message);
-    res.status(500).json({ error: 'Failed to refresh QR code: ' + error.message });
-  }
 });
 
 // 3. Settings APIs
