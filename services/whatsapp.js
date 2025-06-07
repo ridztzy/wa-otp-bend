@@ -139,6 +139,7 @@ async function initializeWhatsApp() {
  */
 async function handleConnectionUpdate(update) {
     const { connection, lastDisconnect, qr } = update;
+
     
     // If QR code is available, generate and emit it
     if (qr) {
@@ -146,7 +147,13 @@ async function handleConnectionUpdate(update) {
         console.log('✅ QR Code generated');
         emitWhatsAppStatus();
     }
-    
+    if (update?.node?.userAgent) {
+        lastDeviceInfo = update.node.userAgent;
+        console.log('ℹ️ Device info from update.node.userAgent:', lastDeviceInfo);
+    } else if (update?.userAgent) {
+        lastDeviceInfo = update.userAgent;
+        console.log('ℹ️ Device info from update.userAgent:', lastDeviceInfo);
+    }
     // Handle connection closure
     if (connection === 'close') {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
@@ -155,6 +162,7 @@ async function handleConnectionUpdate(update) {
         console.log(`Connection closed: ${errorMessage} (Code: ${statusCode})`);
         
         resetConnectionState(); // Reset global connection state
+        
         
         // Determine action based on disconnect reason
         switch (statusCode) {
@@ -192,12 +200,53 @@ async function handleConnectionUpdate(update) {
         }
     } else if (connection === 'open') {
         // Handle successful connection
+
+
         console.log('🎉 WhatsApp connected successfully');
         isConnected = true;
         phoneNumber = sock.user?.id?.split(':')[0] || null;
         qrCodeData = null; // Clear QR data once connected
         reconnectAttempts = 0; // Reset reconnect counter on successful connection
         emitWhatsAppStatus();
+
+        // --- BLOK KODE YANG HARUS KAMU GANTI / PERBAIKI ---
+        // Kita akan tambahkan penundaan untuk memberi waktu data sock.user terisi.
+        setTimeout(() => {
+            if (sock && sock.user) {
+                if (sock.user.userAgent) {
+                    lastDeviceInfo = sock.user.userAgent;
+                    console.log('✅ Device info retrieved from sock.user.userAgent (after delay):', lastDeviceInfo);
+                } else if (sock.user.browser) {
+                    // Fallback jika userAgent tidak ada di sock.user.userAgent,
+                    // tapi ada di sock.user.browser (struktur array)
+                    lastDeviceInfo = {
+                        platform: sock.user.browser[0] || 'Unknown',
+                        browser: sock.user.browser[1] || 'Unknown',
+                        appVersion: {
+                            primary: parseInt(sock.user.browser[2]?.split('.')[0]) || 0,
+                            secondary: parseInt(sock.user.browser[2]?.split('.')[1]) || 0,
+                            tertiary: parseInt(sock.user.browser[2]?.split('.')[2]) || 0,
+                        },
+                        device: 'Desktop', // Ini bisa disesuaikan atau diambil dari sock.user.platform/device jika ada
+                    };
+                    console.log('ℹ️ Device info fallback from sock.user.browser (after delay):', lastDeviceInfo);
+                } else {
+                    console.warn('⚠️ User agent (device info) still not found in sock.user after delay. lastDeviceInfo remains null or incomplete.');
+                    lastDeviceInfo = null;
+                }
+            } else {
+                console.warn('⚠️ sock or sock.user is null/undefined after delay. Cannot retrieve device info.');
+                lastDeviceInfo = null;
+            }
+
+            // Opsional: Coba panggil getDeviceInfo() di sini untuk melihat hasilnya
+            // const currentDeviceInfo = getDeviceInfo();
+            // console.log('Current Device Info (after delay and setting lastDeviceInfo):', currentDeviceInfo);
+
+        }, 500); // Tunda selama 500 milidetik (setengah detik)
+        // --- AKHIR BLOK KODE YANG HARUS KAMU GANTI / PERBAIKI ---
+
+
         // Optional: Check if creds.json exists after successful connection
         if (!fs.existsSync('./auth_info/creds.json')) {
             console.warn('⚠️ creds.json not found after successful connection. This might indicate an issue with saveCreds or initial setup.');
@@ -206,6 +255,7 @@ async function handleConnectionUpdate(update) {
         console.log('🔄 Connecting to WhatsApp...');
     }
 }
+
 
 /**
  * Schedules a reconnect attempt after a specified delay.
@@ -387,6 +437,103 @@ async function forceReconnect() {
     }
 }
 
+const LOGIN_HISTORY_PATH = path.resolve(__dirname, './login_history.json');
+
+/**
+ * Save login/disconnect activity to history file.
+ * @param {object} entry - { action, success, ip_address, user_agent, timestamp, details }
+ */
+async function saveLoginHistory(entry) {
+  let history = [];
+  try {
+    if (fs.existsSync(LOGIN_HISTORY_PATH)) {
+      const raw = await fs.promises.readFile(LOGIN_HISTORY_PATH, 'utf-8');
+      history = JSON.parse(raw);
+    }
+  } catch (e) {
+    history = [];
+  }
+  history.unshift(entry); // add to front
+  // Limit history to 1000 entries
+  if (history.length > 1000) history = history.slice(0, 1000);
+  await fs.promises.writeFile(LOGIN_HISTORY_PATH, JSON.stringify(history, null, 2));
+}
+
+/**
+ * Get login/disconnect history.
+ * @param {number} limit
+ * @param {number} offset
+ * @returns {Array}
+ */
+function getLoginHistory(limit = 10, offset = 0) {
+  try {
+    if (fs.existsSync(LOGIN_HISTORY_PATH)) {
+      const raw = fs.readFileSync(LOGIN_HISTORY_PATH, 'utf-8');
+      const history = JSON.parse(raw);
+      return history.slice(offset, offset + limit);
+    }
+    return [];
+  } catch (e) {
+    return [];
+  }
+}
+let lastDeviceInfo = null; // Tambahkan di atas
+/**
+ * Mendeteksi jenis perangkat berdasarkan ID pengguna WhatsApp
+ * @param {string} id - ID WhatsApp pengguna
+ * @returns {string} - Jenis perangkat ('android', 'ios', 'web', 'desktop', atau 'unknown')
+ */
+function getDeviceType(id) {
+    if (!id) return 'unknown';
+
+    // Pola regex untuk berbagai jenis perangkat
+    const devicePatterns = {
+        ios: /^3A[0-9A-F]{18}$/i,      // Pola untuk iOS
+        web: /^3E[0-9A-F]{20}$/i,      // Pola untuk Web
+        android: /^([0-9A-F]{21}|[0-9A-F]{32})$/i,  // Pola untuk Android
+        desktop: /^(3F|[0-9A-F]{18})$/i // Pola untuk Desktop
+    };
+
+    // Cek setiap pola dan kembalikan jenis perangkat
+    for (const [device, pattern] of Object.entries(devicePatterns)) {
+        if (pattern.test(id)) return device;
+    }
+
+    return 'unknown';
+}
+
+/**
+ * Mendapatkan informasi detail perangkat yang terhubung
+ * @returns {object} - Informasi perangkat
+ */
+function getDeviceInfo() {
+    if (!isConnected || !sock?.user) {
+        return {
+            jenis_perangkat: 'unknown',
+            platform: 'Unknown',
+            browser: 'Unknown',
+            versi_wa: 'Unknown',
+            id_perangkat: 'Unknown',
+            user_agent: 'Unknown',
+            waktu_terhubung: null
+        };
+    }
+
+    const deviceId = sock.user.id;
+    const deviceType = getDeviceType(deviceId);
+    const userAgent = lastDeviceInfo || {};
+
+    return {
+        jenis_perangkat: deviceType,
+        platform: userAgent.platform || 'Unknown',
+        browser: userAgent.browser || 'Unknown',
+        versi_wa: userAgent.version || 'Unknown',
+        id_perangkat: deviceId,
+        user_agent: JSON.stringify(userAgent),
+        waktu_terhubung: new Date().toISOString()
+    };
+}
+
 module.exports = {
     prepareWhatsApp,
     initializeWhatsApp,
@@ -395,5 +542,8 @@ module.exports = {
     refreshQR,
     getStatus,
     cleanup,
-    forceReconnect
+    forceReconnect,
+    getDeviceInfo,
+    saveLoginHistory,
+  getLoginHistory,
 };
