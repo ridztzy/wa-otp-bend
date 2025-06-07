@@ -8,6 +8,7 @@ let qrCodeData = null;
 let isConnected = false;
 let phoneNumber = null;
 let isInitializing = false;
+let isInitialized = false; // Track if service has been initialized
 let io; // Socket.IO instance
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -18,27 +19,41 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 function emitWhatsAppStatus() {
     if (io) {
         io.emit('whatsapp-status', {
-            connected: isConnected,
+            whatsapp_connected: isConnected,
             phone_number: phoneNumber ? `+${phoneNumber}` : null,
             qr_available: !!qrCodeData,
             qrcode: qrCodeData,
-            reconnect_attempts: reconnectAttempts
+            reconnect_attempts: reconnectAttempts,
+            initialized: isInitialized
         });
     }
 }
 
 /**
- * Initializes the WhatsApp connection using Baileys.
+ * Prepare WhatsApp service without initializing connection
  * @param {object} socketIo - The Socket.IO instance to emit status updates.
  */
-async function initializeWhatsApp(socketIo) {
+async function prepareWhatsApp(socketIo) {
+    io = socketIo;
+    console.log('📱 WhatsApp service prepared, waiting for initialization request');
+}
+
+/**
+ * Initializes the WhatsApp connection using Baileys.
+ * This function is called when frontend requests initialization
+ */
+async function initializeWhatsApp() {
     // Prevent multiple simultaneous initializations
     if (isInitializing) {
         console.log('🔄 WhatsApp already initializing...');
-        return;
+        return { success: false, message: 'Already initializing' };
     }
     
-    io = socketIo;
+    // If already connected, return success
+    if (isConnected) {
+        return { success: true, message: 'Already connected' };
+    }
+    
     isInitializing = true;
     console.log('🔄 Initializing WhatsApp connection...');
     
@@ -85,6 +100,9 @@ async function initializeWhatsApp(socketIo) {
             console.error('🚨 WhatsApp Socket Error:', error);
         });
         
+        isInitialized = true;
+        return { success: true, message: 'WhatsApp initialization started' };
+        
     } catch (error) {
         // Log detailed error information for debugging
         console.error('❌ Error initializing WhatsApp:', error.message);
@@ -102,12 +120,14 @@ async function initializeWhatsApp(socketIo) {
             reconnectAttempts++;
             console.log(`🔄 Retrying initialization (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}) in 10 seconds...`);
             setTimeout(() => {
-                initializeWhatsApp(io);
+                initializeWhatsApp();
             }, 10000);
         } else {
             console.error('❌ Max reconnect attempts reached. Manual intervention required.');
             reconnectAttempts = 0; // Reset for next manual attempt
         }
+        
+        return { success: false, error: error.message };
     } finally {
         isInitializing = false;
     }
@@ -204,7 +224,7 @@ function scheduleReconnect(delay = 5000) {
         if (!isInitializing && !isConnected) {
             reconnectAttempts++;
             console.log(`🔄 Reconnect attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
-            initializeWhatsApp(io);
+            initializeWhatsApp();
         }
     }, delay);
 }
@@ -277,6 +297,7 @@ async function disconnect() {
         }
         
         resetConnectionState();
+        isInitialized = false; // Reset initialization status
         reconnectAttempts = 0; // Reset after successful disconnect
         return { success: true };
     } catch (error) {
@@ -303,7 +324,7 @@ async function refreshQR() {
             console.log('🗑️ Auth info cleared for QR refresh.');
         }
         
-        await initializeWhatsApp(io);
+        await initializeWhatsApp();
         return { success: true };
     } catch (error) {
         console.error('❌ Error refreshing QR:', error.message);
@@ -337,7 +358,8 @@ function getStatus() {
         qr_available: !!qrCodeData,
         qrcode: qrCodeData,
         reconnect_attempts: reconnectAttempts,
-        max_attempts: MAX_RECONNECT_ATTEMPTS
+        max_attempts: MAX_RECONNECT_ATTEMPTS,
+        initialized: isInitialized
     };
 }
 
@@ -357,7 +379,7 @@ async function forceReconnect() {
         }
         sock = null; // Clear socket instance
         resetConnectionState(); // Reset global connection state
-        await initializeWhatsApp(io); // Start a new initialization
+        await initializeWhatsApp(); // Start a new initialization
         return { success: true };
     } catch (error) {
         console.error('❌ Error force reconnecting:', error.message);
@@ -366,6 +388,7 @@ async function forceReconnect() {
 }
 
 module.exports = {
+    prepareWhatsApp,
     initializeWhatsApp,
     sendMessage,
     disconnect,

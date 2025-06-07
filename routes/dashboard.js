@@ -2,15 +2,97 @@ const express = require('express');
 const router = express.Router();
 const Log = require('../models/Log');
 
-// GET /api/status
+// GET /api/status - Status lengkap dengan informasi tambahan
 router.get('/status', (req, res) => {
   const { getStatus } = require('../services/whatsapp');
   const status = getStatus();
   
   res.json({
-    whatsapp_connected: status.connected,
-    phone_number: status.phone_number
+    whatsapp_connected: status.whatsapp_connected,
+    phone_number: status.phone_number,
+    qr_available: status.qr_available,
+    qrcode: status.qrcode,
+    reconnect_attempts: status.reconnect_attempts,
+    max_attempts: status.max_attempts
   });
+});
+
+// POST /api/whatsapp/disconnect - Memutus koneksi dan hapus sesi
+router.post('/whatsapp/disconnect', async (req, res) => {
+  try {
+    const { disconnect } = require('../services/whatsapp');
+    const result = await disconnect();
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'WhatsApp disconnected and session cleared. QR scan required for next login.'
+      });
+    } else {
+      res.status(500).json({ 
+        success: false,
+        error: result.error || 'Failed to disconnect WhatsApp' 
+      });
+    }
+  } catch (error) {
+    console.error('Error disconnecting WhatsApp:', error.message);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to disconnect WhatsApp' 
+    });
+  }
+});
+
+// POST /api/whatsapp/refresh-qr - Generate QR code baru
+router.post('/whatsapp/refresh-qr', async (req, res) => {
+  try {
+    const { refreshQR } = require('../services/whatsapp');
+    const result = await refreshQR();
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'QR code refreshed successfully. Check status for new QR.'
+      });
+    } else {
+      res.status(400).json({ 
+        success: false,
+        error: result.error || 'Failed to refresh QR code' 
+      });
+    }
+  } catch (error) {
+    console.error('Error refreshing QR:', error.message);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to refresh QR code' 
+    });
+  }
+});
+
+// POST /api/whatsapp/force-reconnect - Force reconnect dengan clear session
+router.post('/whatsapp/force-reconnect', async (req, res) => {
+  try {
+    const { forceReconnect } = require('../services/whatsapp');
+    const result = await forceReconnect();
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Force reconnect initiated. Check status for connection progress.'
+      });
+    } else {
+      res.status(500).json({ 
+        success: false,
+        error: result.error || 'Failed to force reconnect' 
+      });
+    }
+  } catch (error) {
+    console.error('Error force reconnecting WhatsApp:', error.message);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to force reconnect WhatsApp' 
+    });
+  }
 });
 
 // GET /api/statistik
@@ -38,6 +120,7 @@ router.get('/statistik', async (req, res) => {
     res.json({
       sent_today: sentToday,
       failed_today: failedToday,
+      total_today: totalToday,
       success_rate: successRate
     });
   } catch (error) {
@@ -93,6 +176,34 @@ router.get('/logs', async (req, res) => {
   } catch (error) {
     console.error('Error fetching logs:', error.message);
     res.status(500).json({ error: 'Failed to fetch logs' });
+  }
+});
+
+// DELETE /api/logs - Menghapus logs (opsional, untuk maintenance)
+router.delete('/logs', async (req, res) => {
+  try {
+    const { older_than_days } = req.query;
+    
+    let filter = {};
+    if (older_than_days) {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - parseInt(older_than_days));
+      filter.created_at = { $lt: cutoffDate };
+    }
+    
+    const result = await Log.deleteMany(filter);
+    
+    res.json({
+      success: true,
+      message: `Deleted ${result.deletedCount} log entries`,
+      deleted_count: result.deletedCount
+    });
+  } catch (error) {
+    console.error('Error deleting logs:', error.message);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to delete logs' 
+    });
   }
 });
 
