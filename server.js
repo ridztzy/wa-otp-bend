@@ -10,6 +10,7 @@ const dashboardRoutes = require('./routes/dashboard');
 const whatsappRoutes = require('./routes/whatsapp');
 const settingsRoutes = require('./routes/settings');
 const otpRoutes = require('./routes/otp');
+const authRoutes = require('./routes/auth');
 
 require('dotenv').config();
 
@@ -33,6 +34,7 @@ app.use('/api', dashboardRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api', otpRoutes);
+app.use('/auth', authRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
